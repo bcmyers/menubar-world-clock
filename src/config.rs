@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
-const CONFIG_DIR: &str = ".config/world-clock";
+const APP_DIR: &str = "menubar-world-clock";
 const CONFIG_FILE: &str = "config.toml";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -86,7 +86,11 @@ fn clock(city: &str, timezone: &str) -> ClockConfig {
 pub fn config_path() -> Result<PathBuf, ConfigError> {
     // `dirs` is intentionally used here instead of reading HOME directly.
     let home = dirs::home_dir().ok_or(ConfigError::HomeDirectoryUnavailable)?;
-    Ok(home.join(CONFIG_DIR).join(CONFIG_FILE))
+    let config_home = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.join(".config"));
+    Ok(config_home.join(APP_DIR).join(CONFIG_FILE))
 }
 
 pub fn load_or_create() -> Result<(PathBuf, Vec<ResolvedClock>), ConfigError> {

@@ -1,4 +1,4 @@
-# Copy entries into ~/.config/world-clock/config.toml, then choose
+# Copy entries into ~/.config/menubar-world-clock/config.toml, then choose
 # "Reload Configuration" from the menu bar menu.
 
 [[clocks]]
@@ -16,4 +16,3 @@ timezone = "UTC"
 [[clocks]]
 city = "Paris"
 timezone = "Europe/Paris"
-

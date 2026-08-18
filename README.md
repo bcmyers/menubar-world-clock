@@ -29,8 +29,7 @@ repository or create a remote repository.
 
 ## Keep it running with launchd
 
-Install the signed app at `~/Applications/World Clock.app` and load its
-per-user LaunchAgent:
+Install the signed app and load its per-user LaunchAgent:
 
 ```sh
 ./scripts/install-launch-agent.sh
@@ -39,6 +38,18 @@ per-user LaunchAgent:
 The LaunchAgent starts the app at login and restarts it whenever it exits.
 Because this is an always-running service, choosing **Quit World Clock** causes
 launchd to start it again after a short delay.
+
+Runtime files follow Linux/XDG conventions:
+
+1. App: `~/.local/lib/menubar-world-clock/World Clock.app`
+2. Configuration: `${XDG_CONFIG_HOME:-~/.config}/menubar-world-clock/config.toml`
+3. LaunchAgent source: `${XDG_CONFIG_HOME:-~/.config}/menubar-world-clock/launchd.plist`
+4. Logs: `${XDG_STATE_HOME:-~/.local/state}/menubar-world-clock/launchd.log`
+
+macOS requires a LaunchAgent directory entry at
+`~/Library/LaunchAgents/local.world-clock.plist` for automatic login startup.
+The installer makes that entry a hard link to the canonical plist under
+`XDG_CONFIG_HOME`; no application data or logs are stored under `~/Library`.
 
 To unload and remove the LaunchAgent while leaving the installed app in place:
 
@@ -51,7 +62,7 @@ To unload and remove the LaunchAgent while leaving the installed app in place:
 On first launch, World Clock creates:
 
 ```text
-~/.config/world-clock/config.toml
+~/.config/menubar-world-clock/config.toml
 ```
 
 The home directory is located with the third-party Rust `dirs` crate. The
