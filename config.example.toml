@@ -1,0 +1,19 @@
+# Copy entries into ~/.config/world-clock/config.toml, then choose
+# "Reload Configuration" from the menu bar menu.
+
+[[clocks]]
+city = "San Francisco"
+timezone = "America/Los_Angeles"
+
+[[clocks]]
+city = "New York"
+timezone = "America/New_York"
+
+[[clocks]]
+city = "UTC"
+timezone = "UTC"
+
+[[clocks]]
+city = "Paris"
+timezone = "Europe/Paris"
+
