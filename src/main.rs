@@ -12,15 +12,15 @@ use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, ProtocolObject};
-use objc2::{ClassType, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
+use objc2::{AnyThread, ClassType, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions, NSFont,
     NSFontWeightRegular, NSImage, NSMenu, NSMenuDelegate, NSMenuItem, NSStatusBar, NSStatusItem,
     NSTextAlignment, NSTextField, NSVariableStatusItemLength, NSView, NSWorkspace,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize,
-    NSString, NSTimer, NSURL,
+    MainThreadMarker, NSDate, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes,
+    NSSize, NSString, NSTimer, NSURL,
 };
 
 use crate::config::ResolvedClock;
@@ -283,11 +283,19 @@ impl ClockApp {
             return;
         }
 
+        // Start at the next wall-clock second instead of one second after the
+        // menu opened, keeping the display in phase with the macOS clock.
+        let now = NSDate::date();
+        let next_second =
+            NSDate::dateWithTimeIntervalSince1970(now.timeIntervalSince1970().floor() + 1.0);
+
         // An unscheduled timer in common run-loop modes continues firing while
         // AppKit tracks the open menu, so displayed seconds remain live.
         // SAFETY: `tick:` is registered with the expected NSTimer argument.
         let timer = unsafe {
-            NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
+            NSTimer::initWithFireDate_interval_target_selector_userInfo_repeats(
+                NSTimer::alloc(),
+                &next_second,
                 1.0,
                 self.as_super(),
                 sel!(tick:),
@@ -295,7 +303,6 @@ impl ClockApp {
                 true,
             )
         };
-        timer.setTolerance(0.05);
         // SAFETY: The timer and run-loop mode are valid Foundation objects.
         unsafe {
             NSRunLoop::mainRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes);
