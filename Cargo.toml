@@ -27,6 +27,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSText",
     "NSTextField",
     "NSView",
+    "NSWorkspace",
     "objc2-core-foundation",
 ] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
@@ -38,6 +39,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSRunLoop",
     "NSString",
     "NSTimer",
+    "NSURL",
 ] }
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.4"

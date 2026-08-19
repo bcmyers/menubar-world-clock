@@ -7,20 +7,20 @@ mod config;
 
 use std::cell::{OnceCell, RefCell};
 use std::path::PathBuf;
-use std::process::Command;
 
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, NSObject};
+use objc2::runtime::{AnyObject, NSObject, ProtocolObject};
 use objc2::{ClassType, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions, NSFont,
-    NSFontWeightRegular, NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSTextAlignment,
-    NSTextField, NSVariableStatusItemLength, NSView,
+    NSFontWeightRegular, NSImage, NSMenu, NSMenuDelegate, NSMenuItem, NSStatusBar, NSStatusItem,
+    NSTextAlignment, NSTextField, NSVariableStatusItemLength, NSView, NSWorkspace,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize, NSString, NSTimer,
+    MainThreadMarker, NSObjectProtocol, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSSize,
+    NSString, NSTimer, NSURL,
 };
 
 use crate::config::ResolvedClock;
@@ -43,7 +43,7 @@ struct ClockAppIvars {
     menu: OnceCell<Retained<NSMenu>>,
     rows: RefCell<Vec<ClockRow>>,
     status_item: OnceCell<Retained<NSStatusItem>>,
-    timer: OnceCell<Retained<NSTimer>>,
+    timer: RefCell<Option<Retained<NSTimer>>>,
     config_path: RefCell<Option<PathBuf>>,
 }
 
@@ -55,6 +55,24 @@ define_class!(
     #[ivars = ClockAppIvars]
     struct ClockApp;
 
+    // SAFETY: NSObjectProtocol has no additional safety requirements.
+    unsafe impl NSObjectProtocol for ClockApp {}
+
+    // SAFETY: NSMenuDelegate has no additional safety requirements, and
+    // ClockApp is restricted to AppKit's main thread.
+    unsafe impl NSMenuDelegate for ClockApp {
+        #[unsafe(method(menuWillOpen:))]
+        fn menu_will_open(&self, _menu: &NSMenu) {
+            self.update_times();
+            self.start_timer();
+        }
+
+        #[unsafe(method(menuDidClose:))]
+        fn menu_did_close(&self, _menu: &NSMenu) {
+            self.stop_timer();
+        }
+    }
+
     impl ClockApp {
         #[unsafe(method(tick:))]
         fn tick(&self, _timer: &NSTimer) {
@@ -65,21 +83,27 @@ define_class!(
         fn reload_configuration(&self, _sender: Option<&AnyObject>) {
             if let Err(error) = self.rebuild_menu() {
                 eprintln!("World Clock: {error}");
+                self.show_config_error(&error);
             }
         }
 
         #[unsafe(method(openConfiguration:))]
         fn open_configuration(&self, _sender: Option<&AnyObject>) {
             let path = self.ivars().config_path.borrow().clone();
-            if let Some(path) = path
-                && let Err(error) = Command::new("open").arg(path).spawn()
-            {
-                eprintln!("World Clock: could not open the configuration: {error}");
+            if let Some(path) = path {
+                let path = path.to_string_lossy();
+                let url = NSURL::fileURLWithPath(&NSString::from_str(path.as_ref()));
+                if !NSWorkspace::sharedWorkspace().openURL(&url) {
+                    eprintln!("World Clock: macOS could not open the configuration");
+                }
+            } else {
+                eprintln!("World Clock: the configuration path is unavailable");
             }
         }
 
         #[unsafe(method(quit:))]
         fn quit(&self, _sender: Option<&AnyObject>) {
+            self.stop_timer();
             NSApplication::sharedApplication(self.mtm()).terminate(None);
         }
     }
@@ -93,9 +117,10 @@ impl ClockApp {
         unsafe { msg_send![super(this), init] }
     }
 
-    fn start(&self) -> Result<(), config::ConfigError> {
+    fn start(&self) {
         let mtm = self.mtm();
         let menu = NSMenu::new(mtm);
+        menu.setDelegate(Some(ProtocolObject::from_ref(self)));
         self.ivars()
             .menu
             .set(menu.clone())
@@ -119,29 +144,14 @@ impl ClockApp {
             .set(status_item)
             .expect("status item is initialized once");
 
-        self.rebuild_menu()?;
-
-        // An unscheduled timer added in common run-loop modes continues firing
-        // while AppKit is tracking an open menu, so the displayed seconds stay live.
-        // SAFETY: `tick:` is registered by ClockApp with the expected NSTimer argument.
-        let timer = unsafe {
-            NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
-                1.0,
-                self.as_super(),
-                sel!(tick:),
-                None,
-                true,
-            )
-        };
-        // SAFETY: The timer and run-loop mode are valid Foundation objects.
-        unsafe {
-            NSRunLoop::mainRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes);
+        if let Ok(path) = config::config_path() {
+            *self.ivars().config_path.borrow_mut() = Some(path);
         }
-        self.ivars()
-            .timer
-            .set(timer)
-            .expect("timer is initialized once");
-        Ok(())
+
+        if let Err(error) = self.rebuild_menu() {
+            eprintln!("World Clock: {error}");
+            self.show_config_error(&error);
+        }
     }
 
     fn rebuild_menu(&self) -> Result<(), config::ConfigError> {
@@ -156,6 +166,34 @@ impl ClockApp {
             self.add_clock_row(menu, clock);
         }
 
+        self.add_menu_actions(menu);
+
+        self.update_times();
+        Ok(())
+    }
+
+    fn show_config_error(&self, error: &config::ConfigError) {
+        let menu = self.ivars().menu.get().expect("menu has been created");
+        menu.removeAllItems();
+        self.ivars().rows.borrow_mut().clear();
+
+        let heading = NSMenuItem::sectionHeaderWithTitle(
+            &NSString::from_str("Configuration Error"),
+            self.mtm(),
+        );
+        menu.addItem(&heading);
+
+        let full_error = error.to_string();
+        let detail = NSMenuItem::new(self.mtm());
+        detail.setTitle(&NSString::from_str(&error_summary(&full_error)));
+        detail.setToolTip(Some(&NSString::from_str(&full_error)));
+        detail.setEnabled(false);
+        menu.addItem(&detail);
+
+        self.add_menu_actions(menu);
+    }
+
+    fn add_menu_actions(&self, menu: &NSMenu) {
         menu.addItem(&NSMenuItem::separatorItem(self.mtm()));
         self.add_action_item(menu, "Open Configuration…", sel!(openConfiguration:), "");
         self.add_action_item(
@@ -166,9 +204,6 @@ impl ClockApp {
         );
         menu.addItem(&NSMenuItem::separatorItem(self.mtm()));
         self.add_action_item(menu, "Quit World Clock", sel!(quit:), "q");
-
-        self.update_times();
-        Ok(())
     }
 
     fn add_clock_row(&self, menu: &NSMenu, clock: ResolvedClock) {
@@ -242,6 +277,50 @@ impl ClockApp {
                 .setStringValue(&NSString::from_str(&format_time(now, row.timezone)));
         }
     }
+
+    fn start_timer(&self) {
+        if self.ivars().timer.borrow().is_some() {
+            return;
+        }
+
+        // An unscheduled timer in common run-loop modes continues firing while
+        // AppKit tracks the open menu, so displayed seconds remain live.
+        // SAFETY: `tick:` is registered with the expected NSTimer argument.
+        let timer = unsafe {
+            NSTimer::timerWithTimeInterval_target_selector_userInfo_repeats(
+                1.0,
+                self.as_super(),
+                sel!(tick:),
+                None,
+                true,
+            )
+        };
+        timer.setTolerance(0.05);
+        // SAFETY: The timer and run-loop mode are valid Foundation objects.
+        unsafe {
+            NSRunLoop::mainRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes);
+        }
+        *self.ivars().timer.borrow_mut() = Some(timer);
+    }
+
+    fn stop_timer(&self) {
+        if let Some(timer) = self.ivars().timer.borrow_mut().take() {
+            timer.invalidate();
+        }
+    }
+}
+
+fn error_summary(error: &str) -> String {
+    const MAX_CHARS: usize = 96;
+
+    let normalized = error.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= MAX_CHARS {
+        return normalized;
+    }
+
+    let mut summary = normalized.chars().take(MAX_CHARS - 1).collect::<String>();
+    summary.push('…');
+    summary
 }
 
 fn format_time(now: DateTime<Utc>, timezone: Tz) -> String {
@@ -258,10 +337,7 @@ fn main() {
     application.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
     let clock_app = ClockApp::new(mtm);
-    if let Err(error) = clock_app.start() {
-        eprintln!("World Clock: {error}");
-        std::process::exit(1);
-    }
+    clock_app.start();
 
     application.run();
 }
@@ -277,5 +353,15 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2026, 8, 18, 5, 6, 7).unwrap();
         assert_eq!(format_time(now, chrono_tz::UTC), "Tue 05:06:07");
         assert!(!format_time(now, chrono_tz::UTC).contains("UTC"));
+    }
+
+    #[test]
+    fn error_summary_is_single_line_and_bounded() {
+        let error = format!("bad config\n{}", "x".repeat(120));
+        let summary = error_summary(&error);
+
+        assert!(!summary.contains('\n'));
+        assert_eq!(summary.chars().count(), 96);
+        assert!(summary.ends_with('…'));
     }
 }
