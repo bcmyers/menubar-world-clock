@@ -3,7 +3,7 @@ name = "world-clock"
 version = "0.1.0"
 edition = "2024"
 description = "A native macOS menu bar world clock"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }

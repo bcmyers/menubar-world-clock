@@ -50,3 +50,7 @@ Then choose **Reload Configuration** from the menu.
 
 The required `~/Library/LaunchAgents/local.world-clock.plist` entry is a hard
 link to the canonical plist under `~/.config/menubar-world-clock/`.
+
+## License
+
+Licensed under either Apache 2.0 or MIT, at your option.
